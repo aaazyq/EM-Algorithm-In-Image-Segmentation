@@ -1,0 +1,124 @@
+---
+title: "840-pj-code-kmeans"
+author: "Yuqing Zhang"
+date: "2021/8/11"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## K MEANS 
+
+```{r}
+library(jpeg)
+library(png)
+library(ForeCA)
+library(ramify) # matrix
+library('plot.matrix')
+```
+
+```{r}
+# change the img directory here
+img_dir <- "D:/21spring/840/project/others'work/kmeans/windows.png"
+n_cluster <- 3
+max_iteration <- 15
+err <- 0.00001
+```
+
+```{r}
+readimg <- function(img_dir){
+  img_type = strsplit(img_dir, split = ".", fixed = TRUE)[][2]
+  if (img_type == "png"){
+   img = readPNG(img_dir, native = FALSE)
+  }else {
+    img = readJPEG(img_dir, native = FALSE)}
+  return(img)
+}
+
+img = readimg(img_dir)
+dim(img)
+
+h <- dim(img)
+w <- dim(img)[2]
+channel <- dim(img)[3]
+```
+
+```{r}
+n_samples <- h * w
+# reshape to n_samples * channel
+img_data <- matrix(img, n_samples, channel)
+if (channel == 4) img_data <- img_data[,1:3]
+labels <- numeric(n_samples)
+
+# initial centroids
+centroids_idx <- sample(1:n_samples, n_cluster)
+centroids <- img_data[centroids_idx,]
+
+# initial distance
+distance <- matrix(0, n_samples, n_cluster)
+
+calculate_distance <- function(data, centroids){
+  distance <- matrix(0, n_samples, n_cluster)
+  for (i in 1:n_samples){
+    for (j in 1:n_cluster){
+      distance[i,j] <- dist(rbind(data[i,], centroids[j,]))
+    }
+  }
+  return(distance) 
+}
+
+update_centroids <- function(data, label){
+  for (j in 1:n_cluster){
+    temp = data[label ==j,]
+    count = nrow(temp)
+    centroids[j,] = apply(temp, MARGIN = 2, FUN=sum)/count
+  }
+  centroids
+}
+```
+
+```{r}
+for (iter in 1:max_iteration){
+  # print(iter)
+  # print(c(sum(labels == 1), sum(labels == 2), sum(labels == 3)))
+  distance = calculate_distance(img_data, centroids)
+  labels_old = labels
+  labels = argmin(distance)
+  print(mean(labels == labels_old))
+  if (mean(labels == labels_old) > 1- err){
+    print(paste0('Converged at iteration: ',iter))
+    break
+  }
+  centroids = update_centroids(img_data, labels)
+}
+```
+
+```{r}
+error_list <- c(0.929749, 0.9657972,  0.9793512,
+ 0.9858719, 0.9911417,  0.9939715, 0.9956939,
+ 0.9975804, 0.9986877,  0.9993438, 0.999877,
+ 0.999959, 1)
+png(filename="kmeans-change.png")
+plot(1:13, 1 - error_list, type = "l",
+     xlab = "iteration",  ylab = "change rate",
+     main = "change rate for each iteration (K-means)")
+abline(h = 0, col = 2)
+dev.off()
+```
+
+
+```{r, fig.height=h/30, fig.width=w/30}
+m <- matrix(labels, h, w)
+rotate <- function(x) t(apply(x, 2, rev))
+png(filename="D:/21spring/840/project/others'work/kmeans/results/03.png")
+par(mar = c(5,0,5,0))
+image(rotate(m), useRaster=TRUE, axes=FALSE)
+```
+
+
+```{r, fig.height=h/30, fig.width=w/30}
+dev.off()
+```
+

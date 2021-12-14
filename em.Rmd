@@ -1,0 +1,285 @@
+---
+title: "Appendix"
+author: "Yuqing Zhang"
+date: "2021/8/12"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+```{r, warning = FALSE}
+library(jpeg)
+library(png)
+library(ForeCA)
+library(mvtnorm)
+library('plot.matrix')
+library(ramify) # matrix
+```
+
+```{r}
+# change the img directory here
+img_dir <- "windows.png"
+# change the output name here 
+name <- "c4.png"
+
+n_cluster <- 4
+max_iteration <- 30
+err <- 0.001
+```
+
+## read img
+
+```{r}
+readimg <- function(img_dir){
+  img_type = strsplit(img_dir, split = ".", 
+                      fixed = TRUE)[[1]][2]
+  if (img_type == "png"){
+   img = readPNG(img_dir, native = FALSE)
+  }else {
+    img = readJPEG(img_dir, native = FALSE)}
+  return(img)
+}
+
+img = readimg(img_dir)
+dim(img)
+
+h <- dim(img)[1]
+w <- dim(img)[2]
+channel <- dim(img)[3]
+
+n_samples <- h * w
+# reshape to n_samples * channel
+img_data <- matrix(img, n_samples, channel)
+if (channel == 4) {
+  img_data <- img_data[,1:3]
+  channel <- 3}
+n_dimension <- channel
+labels <- numeric(n_samples)
+```
+
+## initial kmeans
+
+```{r}
+n_samples <- h * w
+# reshape to n_samples * channel
+img_data <- matrix(img, n_samples, channel)
+if (channel == 4) img_data <- img_data[,1:3]
+labels <- numeric(n_samples)
+
+# initial centroids
+centroids_idx <- sample(1:n_samples, n_cluster)
+centroids <- img_data[centroids_idx,]
+
+# initial distance
+distance <- matrix(0, n_samples, n_cluster)
+
+calculate_distance <- function(data, centroids){
+  distance <- matrix(0, n_samples, n_cluster)
+  for (i in 1:n_samples){
+    for (j in 1:n_cluster){
+      distance[i,j] <- dist(rbind(data[i,], 
+                                  centroids[j,]))
+    }
+  }
+  return(distance) 
+}
+
+update_centroids <- function(data, label){
+  for (j in 1:n_cluster){
+    temp = data[label ==j,]
+    count = nrow(temp)
+    centroids[j,] = apply(temp, MARGIN = 2, FUN=sum)/count
+  }
+  centroids
+}
+```
+
+## run kmeans
+
+```{r}
+for (iter in 1:max_iteration){
+  distance = calculate_distance(img_data, centroids)
+  labels_old = labels
+  labels = argmin(distance)
+  print(paste0("iter: ", iter, " change rate:", 
+               1-mean(labels == labels_old)))
+  if (mean(labels == labels_old) > 1- err){
+    print(paste0('Converged at iteration: ',iter))
+    break
+  }
+  centroids = update_centroids(img_data, labels)
+}
+
+m <- matrix(labels, h, w)
+rotate <- function(x) t(apply(x, 2, rev))
+png(filename=paste0("results/kmeans", name))
+par(mar = c(5,0,5,0))
+image(rotate(m), useRaster=TRUE, axes=FALSE)
+dev.off()
+```
+
+```{r}
+image(rotate(m), useRaster=TRUE, axes=FALSE)
+title(main = "k means result")
+```
+
+## initial parameter
+
+```{r}
+random_init <- function(img_data, labels, n_cluster){
+  mean_matrix <- matrix(runif(n_cluster * n_dimension), 
+                        n_cluster, n_dimension)
+  cov_para <- runif(n_cluster)
+  cov_matrix <- array(dim = c(n_dimension, n_dimension, n_cluster))
+  pi_list <- runif(n_cluster)
+  pi_list <- pi_list/sum(pi_list)
+  for (j in 1:n_cluster){
+    cov_matrix[,,j] <- cov_para[j] * diag(n_dimension)
+  }
+  return(list(mean_matrix, cov_matrix, pi_list))
+  }
+
+kmeans_init <- function(img_data, labels, n_cluster){
+  n_dimension <- dim(img_data)[2]
+  cov_matrix <- array(dim = c(n_dimension, n_dimension, n_cluster))
+  pi_list <- numeric(n_cluster)
+  mean_matrix <- matrix(0, n_cluster, n_dimension)
+  for (j in 1:n_cluster){
+    mean_matrix[j,] <- apply(img_data[labels == j,], 2, mean )
+    cov_matrix[,,j] <- cov(img_data[labels == j,])
+    pi_list[j] <- mean(labels == j)
+  }
+  return(list(mean_matrix, cov_matrix, pi_list))
+  }
+
+
+
+#### initial parameter
+# chose whether random or kmeans
+
+# result_temp <- random_init(img_data, labels, n_cluster)
+result_temp <- kmeans_init(img_data, labels, n_cluster)
+mean_matrix <- result_temp[[1]]
+cov_matrix <- result_temp[[2]]
+pi_list <- result_temp[[3]]
+
+# update responsibilities
+update_responsibilities <- function(img_data, mean_matrix, cov_matrix, pi_list){
+  # output matrix: n_samples * n_cluster
+  prob_matrix <- matrix(0, n_samples, n_cluster)
+    for (i in 1:n_samples) {
+      for (j in 1:n_cluster){
+        prob_matrix[i,j] <- pi_list[j] * 
+          dmvnorm(img_data[i,], mean = mean_matrix[j,], 
+                  sigma = cov_matrix[,,j])
+      }
+    }
+  # normalize
+  temp_sum <- apply(prob_matrix, 1, sum)
+  r_matrix <- prob_matrix/temp_sum
+  r_matrix[is.na(r_matrix)] <- 1/n_cluster
+  return(list(prob_matrix, r_matrix))
+}
+```
+
+
+```{r}
+update_pi <- function(m_c){
+  # output vector:  n_cluster
+  return(m_c/n_samples)
+}
+
+update_means <- function(img_data, r_matrix, m_c){
+# output matrix: n_cluster * n_dimension
+t(t(img_data) %*% r_matrix) / m_c}
+
+update_cov <- function(img_data, r_matrix, m_c){
+  # output matrix: n_dimension * n_dimension * n_cluster
+  cov_matrix <- array(dim = c(n_dimension, n_dimension, n_cluster))
+  
+  for (j in 1:n_cluster){
+    temp_j = matrix(0, n_dimension, n_dimension)
+    for (i in 1:n_samples){
+        temp_j <- temp_j + r_matrix[i,j] * ((img_data[i,] - mean_matrix[j,]) %*% t(img_data[i,] - mean_matrix[j,])) 
+      }
+    cov_matrix[,,j] = temp_j / m_c[j]
+  }
+  return(cov_matrix)
+  }
+```
+
+## run EM
+```{r}
+# EM
+label <- labels
+count <- 0
+log_lik <- 2
+log_lik_old <- 1
+
+log_lik_list <- numeric(max_iteration)
+while (count < max_iteration & 
+       abs(log_lik/log_lik_old) - 1> err){
+  
+  label_old <- label
+  log_lik_old <- log_lik
+  count <- count + 1
+  print(paste0("count: ",count))
+  resp_result <- update_responsibilities(
+    img_data, mean_matrix,
+    cov_matrix, pi_list)
+  r_matrix <- resp_result[[2]]
+  prob_matrix <- resp_result[[1]]
+  log_lik <- sum(log(apply(prob_matrix, 1, sum)))
+  log_lik_list[count] <- log_lik
+  
+  print(paste0("log_likelihood: ",log_lik))
+  m_c <- apply(r_matrix, 2, sum) 
+  pi_list <- update_pi(m_c)
+  mean_matrix <- update_means(img_data, r_matrix, m_c)
+  cov_matrix <- update_cov(img_data, r_matrix, m_c)
+  label <- apply(r_matrix, 1, which.max)
+
+  print(mean(label == label_old))
+  
+  for (j in 1:n_cluster){
+    print(paste(j, sum(label == j), sep = ":"))
+  }
+  
+  if (count %% 2 == 0){
+  m <- matrix(label, h, w)
+  png(filename=paste0("results/em_c4_", count, ".png"))
+  par(mar = c(5,0,5,0))
+  image(rotate(m), useRaster=TRUE, axes=FALSE)
+  dev.off()}
+}
+```
+
+
+```{r}
+m <- matrix(label, h, w)
+rotate <- function(x) t(apply(x, 2, rev))
+
+# par(mar = c(5,0,5,0))
+image(rotate(m), useRaster=TRUE, axes=FALSE)
+title(main = "EM result")
+
+```
+
+```{r}
+log_lik_list[1:count]
+plot(1:count, log_lik_list[1:count], type = 'l',
+     xlab = "iteration",
+     ylab = "log-likelihood",
+     main = "log-likelihood estimate over iteration in EM")
+```
+
+```{r}
+png(filename=paste0("plot-", name))
+plot(1:count, log_lik_list[1:count], type = 'l')
+dev.off()
+```
+
+
+
